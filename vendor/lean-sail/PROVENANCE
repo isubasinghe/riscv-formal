@@ -1,0 +1,8 @@
+https://github.com/rems-project/lean-sail
+c816ea7ad03cce98d51acee252540fd4215fede8 (v6)
+
+Lean support sources are vendored to allow offline proof checking.
+Compatibility change for Lean 4.35: ArchSemSequential.interpretSailEffects
+supplies the existing Nat.decLt instance explicitly for the FinChoice alias.
+No axiom or replacement ISA semantics is added.
+Package configuration omits upstream test targets, which are not vendored.

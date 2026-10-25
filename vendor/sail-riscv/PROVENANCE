@@ -1,0 +1,8 @@
+https://github.com/riscv/sail-riscv
+b7d13572fcd4a87d0999eb6303652cd05a47881e
+Sail 0.20.3 (sail2 @ 60695b1ea377048f0adc39c62671cd099b2ed9f6)
+Modules: I_insts Zicsr_insts postlude (and their project dependencies)
+Zicfilp support is disabled in the configuration.
+Compatibility patch: qualify Sail assert calls for Lean 4.35.
+Configuration: rv64.json
+Regenerate: python3 scripts/setup_sail.py --regenerate

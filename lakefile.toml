@@ -1,0 +1,19 @@
+name = "riscvc"
+version = "0.1.0"
+defaultTargets = ["Riscvc", "riscvc"]
+testDriver = "riscvc_tests"
+
+[[require]]
+name = "riscv_sail"
+path = "vendor/sail-riscv"
+
+[[lean_lib]]
+name = "Riscvc"
+
+[[lean_exe]]
+name = "riscvc"
+root = "Main"
+
+[[lean_exe]]
+name = "riscvc_tests"
+root = "Tests"

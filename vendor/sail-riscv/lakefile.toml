@@ -1,0 +1,10 @@
+name = "riscv_sail"
+defaultTargets = ["RiscvSail"]
+moreLeanArgs = ["--tstack=400000"]
+
+[[lean_lib]]
+name = "RiscvSail"
+
+[[require]]
+name = "lean-sail"
+path = "../lean-sail"

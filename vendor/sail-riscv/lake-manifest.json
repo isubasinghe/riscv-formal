@@ -1,0 +1,14 @@
+{"version": "1.3.0",
+ "packagesDir": ".lake/packages",
+ "packages":
+ [{"type": "path",
+   "scope": "",
+   "name": "«lean-sail»",
+   "manifestFile": "lake-manifest.json",
+   "inherited": false,
+   "dir": "../lean-sail",
+   "copy": false,
+   "configFile": "lakefile.toml"}],
+ "name": "riscv_sail",
+ "lakeDir": ".lake",
+ "fixedToolchain": false}
