@@ -123,7 +123,7 @@ def harness() -> str:
 
 
 def reject_bad_types() -> None:
-    prelude = "import Riscvc.Heap.Examples\nopen Riscvc.Heap Riscvc.Heap.Examples\n"
+    prelude = "import examples.LinkedList\nopen Riscvc.Heap Riscvc.Heap.Examples\n"
     cases = {
         "word-as-pointer": "def bad := [riscv_mem| fun (p : u64) locals => { return p.next : ptr Node }]",
         "wrong-field-type": "def bad := [riscv_mem| fun (p : ptr Node) locals => { p.next := 42; return p : ptr Node }]",

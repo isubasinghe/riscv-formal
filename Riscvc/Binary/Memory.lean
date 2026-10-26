@@ -55,7 +55,7 @@ theorem readBytes_ok (s : SailState) (a : Nat) (v : Word) (h : WordAt s a v) :
     h0, h1, h2, h3, h4, h5, h6, h7, Nat.reduceAdd, Nat.reduceMul]
   congr 1
   apply Prod.ext
-  · bv_decide
+  · bv_normalize
   · rfl
 
 theorem writeBytes_ok (s : SailState) (a : Nat) (v : Word) :
@@ -170,7 +170,8 @@ theorem in_ram (a : Word) (h : Address a) :
       simp only [zopz0zIzJ_u, Sail.BitVec.toNatInt, decide_eq_true_eq]
       exact Int.ofNat_le
     simp only [range_subset, Bool.and_eq_true, ule]
-    bv_decide
+    simp [BitVec.le_def, BitVec.toNat_sub, BitVec.toNat_add] at *
+    omega
   simpa [matching_pma_region, matching_pma_region_bits_range, ram,
     bits_of_physaddr, zero_extend, Sail.BitVec.zeroExtend, to_bits, Sail.get_slice_int] using congrArg (fun b => if b then some ram else none) range
 
@@ -182,7 +183,19 @@ theorem page_ok (a : Word) (h : Address a) :
     change a.toNat &&& (2^3-1) = 0
     rw [Nat.and_two_pow_sub_one_eq_mod, h.2.2]
   have hp : a &&& 0xfffffffffffff000 = (a + 8 - 1) &&& 0xfffffffffffff000 := by
-    bv_decide
+    have mask_eq (x : Word) : x &&& 0xfffffffffffff000 = (x >>> 12) <<< 12 := by
+      exact (BitVec.shiftLeft_ushiftRight (x := x) (n := 12)).symm
+    erw [mask_eq, mask_eq]
+    congr 1
+    apply BitVec.eq_of_toNat_eq
+    have hn : (a + 8 - 1).toNat = a.toNat + 7 := by
+      simp [BitVec.toNat_sub, BitVec.toNat_add]
+      have := h.1
+      have := h.2.1
+      omega
+    simp only [BitVec.toNat_ushiftRight, hn, Nat.shiftRight_eq_div_pow]
+    have := h.2.2
+    omega
   have mask : Sail.BitVec.updateSubrange (ones (n := 64)) 11 0 (zeros (n := 12)) =
       0xfffffffffffff000#64 := by decide
   unfold split_on_page_boundary
@@ -341,7 +354,10 @@ theorem ld_next (s : SailState) (p v : Word) (ready : Ready s)
     tr, vread_ok s (p + 8) v ready ha hv, Functions.xlen_bytes,
     extend_value, writeReg_ok, xreg_write_callback, xreg_full_write_callback]
   erw [tr]
-  simp [vread_ok s (p + 8) v ready ha hv, writeReg_ok, reg_name_forwards]
+  simp only [EStateM.pure, EStateM.map, bind, EStateM.bind]
+  erw [vread_ok s (p + 8) v ready ha hv]
+  simp [writeReg_ok, reg_name_forwards, encdec_reg_forwards_matches,
+    encdec_reg_forwards, get_config_use_abi_names, reg_arch_name_raw_forwards]
   rfl
 
 /-- The actual Sail instruction that links the last node to the suffix. -/
@@ -357,6 +373,43 @@ theorem sd_next (s : SailState) (p v : Word) (ready : Ready s)
     sign_extend, Sail.BitVec.signExtend, tr, Functions.xlen_bytes,
     Sail.BitVec.extractLsb, BitVec.extractLsb, vwrite_ok s (p + 8) v ready ha]
   erw [tr]
-  simp [vwrite_ok s (p + 8) v ready ha]
+  simp only [EStateM.pure, EStateM.map, bind, EStateM.bind]
+  erw [vwrite_ok s (p + 8) v ready ha]
+  rfl
+
+/-- The register operands are read by Sail itself; the effective address uses
+the signed 12-bit immediate from the decoded instruction. -/
+theorem store64 (s : SailState) (imm : BitVec 12) (rs1 rs2 : regidx)
+    (p v : Word) (ready : Ready s)
+    (hp : rX_bits rs1 s = .ok p s) (hv : rX_bits rs2 s = .ok v s)
+    (ha : Address (p + imm.signExtend 64)) :
+    execute_STORE imm rs2 rs1 8 s =
+      .ok RETIRE_SUCCESS (putWord s (p + imm.signExtend 64).toNat v) := by
+  have tr := transform_ok s (p + imm.signExtend 64) true ready
+  simp only [dataAccess, ite_true] at tr
+  simp [execute_STORE, vmem_write, get_transformed_data_addr, ext_data_get_addr,
+    sign_extend, Sail.BitVec.signExtend, hp, hv, Functions.xlen_bytes,
+    Sail.BitVec.extractLsb, BitVec.extractLsb]
+  erw [tr]
+  simp only [EStateM.pure, EStateM.map, bind, EStateM.bind]
+  erw [vwrite_ok s (p + imm.signExtend 64) v ready ha]
+  rfl
+
+theorem load64 (s after : SailState) (imm : BitVec 12) (rs1 rd : regidx)
+    (p v : Word) (ready : Ready s)
+    (hp : rX_bits rs1 s = .ok p s)
+    (ha : Address (p + imm.signExtend 64))
+    (hv : WordAt s (p + imm.signExtend 64).toNat v)
+    (hw : wX_bits rd v s = .ok () after) :
+    execute_LOAD imm rs1 rd false 8 s = .ok RETIRE_SUCCESS after := by
+  have tr := transform_ok s (p + imm.signExtend 64) false ready
+  simp only [dataAccess, Bool.false_eq_true, ite_false] at tr
+  simp [execute_LOAD, vmem_read, get_transformed_data_addr, ext_data_get_addr,
+    hp, sign_extend, Sail.BitVec.signExtend, Functions.xlen_bytes, extend_value]
+  erw [tr]
+  simp only [EStateM.pure, EStateM.map, bind, EStateM.bind]
+  erw [vread_ok s (p + imm.signExtend 64) v ready ha hv]
+  simp only [EStateM.pure, EStateM.map, bind, EStateM.bind, BitVec.signExtend_eq]
+  erw [hw]
 
 end Riscvc.Binary.Memory

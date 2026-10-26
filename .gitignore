@@ -21,6 +21,7 @@ __pycache__/
 .venv/
 
 # Editor and OS temporary files
+.ccls-cache/
 *.swp
 *.swo
 *~

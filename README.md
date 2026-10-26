@@ -11,16 +11,18 @@ nodes, leaving optimisation and machine details to LLVM. The general compiler
 proof ends at the internal IR. A reusable binary lifter now generates an
 addressed Sail instruction IR and Lean certificates connecting it to actual ELF
 bytes. Program contracts can then be proved in Lean and transferred to the
-binary. **`count_up` and the conditional `choose` have end-to-end proofs against
-our source IR.** An optional bounded SMT checker supports the integer subset;
+binary. **`count_up`, the conditional `choose`, and `scheduler_init` have
+end-to-end source-to-binary proofs.** An optional bounded SMT checker supports the integer subset;
 its translation is not yet Lean-verified. LLVM itself remains an untrusted code
 producer. Integration tests also use the neighboring `sail-riscv` emulator.
 
-The `riscv_mem` extension implements mutable structs and linked-list append.
+The `riscv_mem` extension implements mutable structs, linked-list append, and a
+[runnable round-robin scheduler](#complete-linked-list-scheduler).
 Append has a Lean proof of termination, concatenated contents, and preservation
 of unrelated heap cells. Its LLVM output runs in the Sail emulator and has a
-certified lift. **The append source theorem is not yet transferred to its binary:**
-the aligned-cell heap model still needs a proved relation to Sail data memory.
+certified lift. The typed heap now has a proved reference lowering to Sail's
+byte memory. **The append source theorem is not yet transferred to its binary:**
+its optimized machine-code loop still needs a program-specific refinement proof.
 
 ## Write a program and prove it
 
@@ -242,6 +244,9 @@ elaborates to a small, explicit syntax tree, with a precisely defined evaluator.
 
 ## Structs, heap operations, and linked-list append
 
+The linked-list implementation is in [examples/LinkedList.lean](examples/LinkedList.lean),
+with its proof in [examples/proof/AppendProof.lean](examples/proof/AppendProof.lean).
+
 ```lean
 import Riscvc
 open Riscvc.Heap
@@ -289,7 +294,7 @@ accesses fail. `Exec` is an inductive execution relation with no unrolling bound
 access from fuel exhaustion. No fuel or dynamic memory checks are emitted by
 LLVM; valid memory accesses must follow from the caller's contract.
 
-[AppendProof.append_correct](Riscvc/Heap/AppendProof.lean) proves the actual quoted
+[AppendProof.append_correct](examples/proof/AppendProof.lean) proves the actual quoted
 program for arbitrarily long finite lists. `ListRep` describes their addresses,
 values, and links; a duplicate-free combined footprint states exclusive ownership
 and disjointness. The theorem proves termination, the returned head, the same
@@ -298,7 +303,7 @@ first list. It uses only Lean's standard axioms. Proofs and ghost node lists are
 absent from emitted code.
 
 ```sh
-lake build Riscvc.Heap.AppendProof
+lake build examples.proof.AppendProof
 lake exe riscvc --llvm list_append > list_append.ll
 python3 scripts/test_heap.py
 python3 scripts/lift_binary.py --example list_append --output build/lifted-list-append
@@ -315,9 +320,217 @@ errors, native O0/O2 execution, and RV64 O0/O2 execution in Sail with ABI checks
 The lifter supports `ld`/`sd` and proves their decoding and execution transfer
 using Sail's semantics. The SMT checker deliberately rejects memory instructions.
 The remaining proof obligation for **end-to-end append binary equivalence** is
-to relate the source heap to Sail's byte memory and prove the function contract
+to use the proved heap/Sail memory relation to establish the function contract
 over the lifted loop, including memory permissions and immutable code. Neither
 runtime tests nor a lifting certificate discharge that obligation.
+
+### Complete linked-list scheduler
+
+[examples/Scheduler.lean](examples/Scheduler.lean) implements a small scheduler
+with a linked runnable queue and a linked free list. Each simulated process has
+a nonzero PID and a remaining number of time slices. A tick executes the head
+process for one slice, then either moves it to the tail or returns its completed
+slot to the free list. Each time slice simulates work by decrementing that counter.
+
+All initialization of scheduler state, process insertion, removal, queue rotation,
+and slot recycling are written in `riscv_mem`. The
+[C driver](examples/scheduler.c) supplies a finite pool of storage, connects its
+initial free-list links, parses terminal commands, and prints the queue. It calls
+the compiled DSL functions for every state transition.
+
+With Lean, Python 3, and Clang installed on a 64-bit host:
+
+```sh
+# Compile the DSL to LLVM, link a standalone executable, and run a demonstration.
+python3 scripts/run_scheduler.py --demo --capacity 3
+
+# Start an interactive scheduler with four reusable process slots.
+python3 scripts/run_scheduler.py --capacity 4
+```
+
+The interactive commands are:
+
+| Command | Behavior |
+| --- | --- |
+| `add PID TICKS` | Append a new process to the runnable queue. Both values must be positive u64 integers. |
+| `remove PID` | Remove a process from any queue position and recycle its slot. |
+| `tick [N]` | Run up to N time slices (default 1), stopping if the queue becomes empty. |
+| `list` | Show the runnable queue as `PID(remaining ticks)`, plus process and tick counts. |
+| `help`, `quit` | Show commands or exit. |
+
+For example, `add 10 3`, `add 20 2`, `tick`, `remove 20`, and `add 30 1` exercise
+insertion, rotation, cancellation, and reuse. Duplicate PIDs, zero work, exhausted
+storage, missing PIDs, and idle ticks return errors without changing scheduler
+memory. Completed processes disappear automatically. A removed or completed PID
+can be added again. Storage usage is bounded by `--capacity` (default 8).
+
+The executable remains at `build/scheduler/scheduler` and can be run directly.
+Use `--build-only` to compile without starting it. The two exported functions are
+`scheduler_init(state, pool)` and `scheduler_step(state, op, pid, work)`;
+their layouts, operation codes, and return statuses are documented in the Lean
+source. The scheduler is single-threaded and requires exclusive access to its
+state and process pool.
+
+```sh
+# Source interpreter, native O0/O2, command-line driver, and RV64 Sail checks.
+python3 scripts/test_scheduler.py
+# Run without the neighboring Sail emulator (still builds the RISC-V ELF).
+python3 scripts/test_scheduler.py --skip-sail
+```
+
+The tests compare every state field and process slot against an independent
+queue model. They cover head/middle/tail removal, pool exhaustion and reuse,
+round-robin order, completion, empty and singleton queues, invalid commands,
+64-bit boundary values, and preservation of unrelated memory and ABI registers.
+The scheduler has execution tests and end-to-end Lean translation proofs for
+both the initializer and command handler, bound to their disassembly below. A general
+Lean proof of scheduler invariants (such as queue ownership and fairness) is
+separate from translation correctness and has not been proved.
+
+### Scheduler source-to-Sail proofs
+
+```sh
+lake build examples.proof.SchedulerSail examples.proof.SchedulerInit examples.proof.SchedulerStep
+python3 scripts/lift_binary.py --example scheduler_init \
+  --proof-module examples.proof.SchedulerInit --output build/scheduler-proof/init
+python3 scripts/lift_binary.py --example scheduler_step \
+  --proof-module examples.proof.SchedulerStep --output build/scheduler-proof/step
+python3 scripts/test_scheduler_lean.py
+```
+
+Translation validation does not trust LLVM. The two semantic paths are:
+
+```mermaid
+flowchart LR
+    DSL[Typed DSL] --> LLVM[LLVM and RV64 ELF]
+    DSL -->|Lean reference-lowering theorem| SourceSail[Sail computation]
+    LLVM -->|Lean ELF and decoder certificate| BinarySail[Sail instruction execution]
+    SourceSail -->|Lean equivalence proof for init and step| BinarySail
+```
+
+[SailLowering.lean](Riscvc/Heap/SailLowering.lean) lowers the typed expressions
+and commands to computations using the generated Sail virtual-memory loads
+and stores. `function_correct_all_fuel` proves that every valid terminating DSL
+execution has a corresponding Sail computation returning the same word and
+representing the same final heap. It also preserves registers and every byte
+outside the allocated source heap. `memory_unique` shows that representation
+plus the frame condition determines **every** final physical byte.
+
+The proof is by induction on the unbounded `Exec` derivation, including the
+recursive `while` case. Fuel is an existential witness for a particular finite
+execution; there is no fixed pool capacity or iteration limit. Preconditions
+require aligned allocated cells in `[0x80001000, 0x90000000)` and the explicit
+Sail machine/RAM setup in `Binary.Memory.Ready`.
+
+[SchedulerSail.lean](examples/proof/SchedulerSail.lean) applies that theorem to
+the actual quoted `init` and `step` definitions. This proves the reference
+source lowering, including both loops. The program-specific proofs below connect
+that source semantics to the optimized instruction streams.
+
+[SchedulerInit.lean](examples/proof/SchedulerInit.lean) additionally proves
+`refines` and `ir_correct` for the initializer's eight real instructions. It
+checks the returned zero, return address, all six field stores, other heap cells,
+and preserved registers. `pre_inhabited` constructs a satisfying input. The
+lifter binds this contract to the exact ELF using `program_matches`, producing
+`LiftedBinary.equivalent`. The negative tests reject both changed ELF store
+offsets and a changed DSL initializer; the source test uses a temporary overlay.
+
+[SchedulerStep.lean](examples/proof/SchedulerStep.lean) proves `refines` for all
+122 optimized instructions, including add, removal, tick, rotation, completion,
+and error returns. `step_sail_equivalence` relates the reference Sail computation
+to native Sail instruction execution: the returned word and **every physical
+memory byte** agree. The native execution returns to `ra` and preserves `ra`,
+registers outside `a0`–`a7`, and memory outside the source heap.
+
+The segment proofs select continuations from the actual quoted DSL body.
+[Control.lean](Riscvc/Heap/Control.lean) connects them to the source semantics,
+and induction on a terminating source execution composes any number of loop
+iterations. [WordMachine.lean](Riscvc/Binary/WordMachine.lean) proves that each
+word-level transition executes the corresponding generated Sail instruction.
+The proof-generating tactics produce ordinary kernel-checked terms; no solver
+result, native-evaluation axiom, or execution bound is assumed. The theorem
+requires defined, terminating source behavior, aligned allocated RAM, a
+configured Sail machine, and an aligned return address. It does not prove
+scheduler ownership invariants, fairness, or termination of arbitrary heaps.
+
+### Scheduler disassembly validation
+
+```sh
+python3 scripts/verify_scheduler.py
+python3 scripts/test_scheduler_equivalence.py
+```
+
+The verifier compiles `scheduler_init` and `scheduler_step` to optimized RV64
+ELFs, disassembles them, and checks Lean lifting certificates for their 8 and 122
+instructions. It then exports the **actual elaborated DSL bodies** through
+[SchedulerExport.lean](examples/proof/SchedulerExport.lean) and checks them against
+the decoded instructions with Z3. The source algorithm is not copied into a
+handwritten specification.
+It checks and audits the source reference theorems and both source-to-binary
+contracts. The SMT checks are an independent regression check and are not
+premises of the Lean proofs.
+
+The SMT checks use symbolic 64-bit inputs and an arbitrary memory array. They
+compare the return value, return address, entire memory array, and registers
+outside `a0`–`a7`. Every binary load/store must access mapped, aligned RAM whenever
+the corresponding source execution is valid. Source memory accesses are required
+to lie in `[0x80001000, 0x90000000)`; the checker requires executable text to fit
+in the disjoint 4 KiB window starting at `0x80000000`. These restrictions match
+the data-memory setup in `Riscvc.Binary.Memory`.
+
+Both traversal loops are checked inductively at these cutpoints in the optimized
+`scheduler_step` disassembly:
+
+| Cutpoint | Source/binary relation |
+| --- | --- |
+| Entry | Same function arguments and heap; source locals initialized to zero. |
+| `0x8000003c` | Add scan: `cur = a4`, `duplicate = a6`, nonzero current node, preserved arguments. |
+| `0x800000ac` | Remove scan's first node: `cur = a3`, `prev = null`. |
+| `0x800000d0` | Later remove nodes: `cur = a3`, `prev = a5`, both nonzero. |
+
+For each source segment, the checker explores all binary branch paths to the
+next cutpoint or return. It asks whether a valid source path can lack a matching,
+memory-safe binary path with the same heap and related state. Each of the five
+obligations (initialization plus four step cutpoints) must be `unsat`. Each
+cutpoint's input domain must also be `sat`, ruling out an inconsistent invariant.
+Missing targets, unsupported instructions, and cycles outside the selected
+cutpoints cannot pass validation.
+
+The inductive argument is: the entry relation holds initially, each segment
+preserves the relation, and the return relation establishes the same observable
+result and heap. Induction over the source's finite sequence of loop visits
+therefore covers every valid terminating source execution in the stated memory
+domain. There is **no fixed list-length or loop-unrolling bound**. Exploration
+limits apply only to individual segments and cause rejection if exceeded.
+Termination on a finite acyclic runnable list follows from following its next
+links; behavior on invalid or cyclic heaps is outside this claim.
+
+Artifacts are written under `build/scheduler-proof/`: `init/` and `step/` contain
+the exact ELF, `.disasm`, lifted Lean certificate, and axiom audit;
+`equivalence/` contains the SMT queries; `equivalence.json` records results and
+hashes of the ELF, source export, verifier inputs, and queries. `--smt-only`
+rechecks existing ELF artifacts against the current DSL without repeating the
+Lean proofs. Its report explicitly records that distinction. A successful full
+run records `lean_source_equivalence_proved: true` and binary equivalence checks
+for both functions. An SMT-only run records those Lean checks as false.
+
+Negative controls mutate real ELF bytes to introduce a wrong initialization
+field, incorrect tick decrement, broken tail update, incorrect duplicate result,
+wrong traversal field, and an infinite loop. They must produce counterexamples.
+The tests also reject source drift, unsupported opcodes, and indirect jumps the
+validator does not model.
+The Lean negative controls separately reject a changed tick instruction at
+`program_matches` and a changed DSL duplicate result at `add_segment`, in
+addition to the initializer mutations. Source mutations use temporary module
+overlays and rebuild the affected proof dependencies.
+
+**Proof boundary:** reference lowering, segment simulation, loop composition,
+Sail instruction execution, ELF parsing, and decoding are Lean checked for
+both RV64 functions. The mathematical result does not trust LLVM, the Python
+symbolic executor, or Z3. Associating the certificate's byte literal with the
+disk file uses filesystem I/O; the axiom audit allows Lean's standard axioms
+and four upstream Sail platform declarations. The C terminal driver and host
+allocator are outside the proof's scope.
 
 ## What is proved
 
@@ -374,7 +587,7 @@ The LLVM lowering and LLVM's optimisation/code generation are outside those
 general theorems. Binary validation bypasses those stages: the reusable lifting
 theorem connects decoded execution to the ELF, and a program-specific contract
 connects its result to the source IR. Such contracts are currently proved for
-`count_up` and `choose`; lifting certificates alone, bounded SMT checks, and
+`count_up`, `choose`, and `scheduler_init`; lifting certificates alone, bounded SMT checks, and
 emulator integration tests are distinct from those end-to-end Lean proofs.
 
 The LLVM emitter explicitly masks shift counts with 63 before `shl`/`lshr`,
@@ -629,9 +842,9 @@ Sail 0.20.3 using `python3 scripts/setup_sail.py --regenerate`; the source check
 is never modified. The generated definitions only receive a syntactic
 qualification of `assert` to avoid Lean 4.35's new keyword.
 
-Further systems-language work includes a proved relation from the typed heap to
-Sail data memory, reusable separation/frame rules, allocation, calls between heap
-functions, and verified stack spilling. Keeping source semantics independent
+Further systems-language work includes transferring the scheduler step and
+append contracts to their optimized binaries, richer separation rules,
+allocation, calls between heap functions, and verified stack spilling. Keeping source semantics independent
 of Sail allows program proofs to remain small while the backend proof handles
 machine details.
 

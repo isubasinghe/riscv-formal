@@ -1,4 +1,4 @@
-import Riscvc.Heap.AppendProof
+import examples.proof.AppendProof
 
 namespace Riscvc.Heap.Tests
 

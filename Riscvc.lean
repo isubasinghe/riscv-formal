@@ -10,4 +10,4 @@ import Riscvc.RecursiveAssembly
 import Riscvc.LLVM
 import Riscvc.Heap.Syntax
 import Riscvc.Heap.LLVM
-import Riscvc.Heap.AppendProof
+import examples.proof.AppendProof

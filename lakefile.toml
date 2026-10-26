@@ -9,6 +9,7 @@ path = "vendor/sail-riscv"
 
 [[lean_lib]]
 name = "Riscvc"
+roots = ["Riscvc", "examples.LinkedList", "examples.proof.AppendProof", "examples.Scheduler", "examples.proof.SchedulerInit", "examples.proof.SchedulerSail", "examples.proof.SchedulerStepProgram", "examples.proof.SchedulerStepTactics", "examples.proof.SchedulerStepSegments", "examples.proof.SchedulerStep"]
 
 [[lean_exe]]
 name = "riscvc"

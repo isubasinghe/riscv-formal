@@ -1,7 +1,8 @@
 import Riscvc.Examples
 import Riscvc.RecursiveExamples
 import Riscvc.SMT
-import Riscvc.Heap.Examples
+import examples.LinkedList
+import examples.Scheduler
 
 open Riscvc Riscvc.Examples
 
@@ -18,7 +19,9 @@ private def emitRecursive (entry : RecursiveExamples.Example) (llvm : Bool) : IO
 private def heapExamples : List (String × Except String String) :=
   [("list_append", Heap.LLVM.emit "list_append" Heap.Examples.append),
    ("node_set_value", Heap.LLVM.emit "node_set_value" Heap.Examples.setValue),
-   ("node_head_or_zero", Heap.LLVM.emit "node_head_or_zero" Heap.Examples.headOrZero)]
+   ("node_head_or_zero", Heap.LLVM.emit "node_head_or_zero" Heap.Examples.headOrZero),
+   ("scheduler_init", Heap.LLVM.emit "scheduler_init" Heap.Scheduler.init),
+   ("scheduler_step", Heap.LLVM.emit "scheduler_step" Heap.Scheduler.step)]
 
 private def emitHeap (code : Except String String) : IO Unit :=
   match code with

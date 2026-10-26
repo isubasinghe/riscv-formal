@@ -1,4 +1,4 @@
-import Riscvc.Heap.Examples
+import examples.LinkedList
 
 namespace Riscvc.Heap.AppendProof
 
